@@ -8,32 +8,37 @@ const enabled = document.getElementById('enabled');
 
 // Listen for clicks on the input elements, and send the appropriate message
 // to the content script in the page.
-function eventHandler(e) {
+async function eventHandler(e) {
 	// Send message to content script to color lines
-	function apply_gradient(tabs) {
-		chrome.tabs.sendMessage(tabs[0].id, {
-			command: "apply_gradient",
-			colors: [color1.value, color2.value],
-			color_text: color_text.value,
-			gradient_size: gradient_size.value
-		});
+	async function apply_gradient(tabs) {
+		if (!tabs || tabs.length === 0) return;
+		try {
+			await chrome.tabs.sendMessage(tabs[0].id, {
+				command: "apply_gradient",
+				colors: [color1.value, color2.value],
+				color_text: color_text.value,
+				gradient_size: gradient_size.value
+			});
+		} catch (error) {
+			console.error('Error applying gradient:', error);
+		}
 	}
 
 	// Send message to content script to reset lines
-	function reset(tabs) {
-		chrome.tabs.sendMessage(tabs[0].id, {
-			command: "reset",
-			color_text: color_text.value
-		});
-	}
-
-	// Just log the error to the console.
-	function reportError(error) {
-		console.error(`${error}`);
+	async function reset(tabs) {
+		if (!tabs || tabs.length === 0) return;
+		try {
+			await chrome.tabs.sendMessage(tabs[0].id, {
+				command: "reset",
+				color_text: color_text.value
+			});
+		} catch (error) {
+			console.error('Error resetting:', error);
+		}
 	}
 
 	// Store attributes into local storage
-	chrome.storage.local.set({
+	await chrome.storage.local.set({
 		color1: color1.value,
 		color2: color2.value,
 		color_text: color_text.value,
@@ -42,14 +47,15 @@ function eventHandler(e) {
 	});
 
 	// Dispatch depending on checkbox enabled state
-	if (enabled.checked) {
-		try {
-			chrome.tabs.query({ active: true, currentWindow: true }, apply_gradient);
-		} catch (e) { reportError(e); }
-	} else {
-		try {
-			chrome.tabs.query({ active: true, currentWindow: true }, reset);
-		} catch (e) { reportError(e); }
+	try {
+		const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+		if (enabled.checked) {
+			await apply_gradient(tabs);
+		} else {
+			await reset(tabs);
+		}
+	} catch (error) {
+		console.error('Error handling event:', error);
 	}
 }
 
@@ -60,13 +66,13 @@ chrome.storage.local.get({
 	color_text: "#000000",
 	gradient_size: 50,
 	enabled: false
-}, function(result) {
+}).then(function(result) {
 	color1.value = result.color1;
 	color2.value = result.color2;
 	color_text.value = result.color_text;
 	gradient_size.value = result.gradient_size;
 	enabled.checked = result.enabled;
-})
+});
 
 // Register event listeners to update page when options change
 document.getElementById("enabled").addEventListener("change", eventHandler);
