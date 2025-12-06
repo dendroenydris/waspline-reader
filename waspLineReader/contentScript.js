@@ -1,4 +1,87 @@
 (function() {
+
+  // Use word-based splitting instead of character-based for better performance
+  var wrapWordsInChildElement = function(el) {
+    if(el.nodeName == '#text') {
+      var text = el.textContent;
+      if (!text || text.trim().length === 0) return;
+      
+      // Split by words (including spaces) instead of characters
+      var words = text.match(/\S+|\s+/g) || [];
+      var fragment = document.createDocumentFragment();
+      
+      for(var i = 0; i < words.length; i++) {
+        var span = document.createElement('span');
+        span.className = "js-detect-wrap";
+        span.textContent = words[i];
+        fragment.appendChild(span);
+      }
+      
+      el.parentNode.insertBefore(fragment, el);
+      el.parentNode.removeChild(el);
+    }
+    else if(el.nodeType === 1) { // Element node
+      // Process child nodes
+      var children = Array.from(el.childNodes);
+      for(var i = 0; i < children.length; i++) {
+        wrapWordsInChildElement(children[i]);
+      }
+    }
+  };
+
+  var wrapWordsInElement = function(el) {
+    // Skip if already processed
+    if (el.querySelector && el.querySelector('.js-detect-wrap')) {
+      return;
+    }
+    wrapWordsInChildElement(el);
+  }
+
+  var getLines = function(el) {
+    wrapWordsInElement(el);
+
+    var spans = el.getElementsByClassName('js-detect-wrap');
+    if (spans.length === 0) return [];
+
+    var lastOffset = -1, line = [], lines = [];
+    
+    for(var i = 0; i < spans.length; i++) {
+      var span = spans[i];
+      var rect = span.getBoundingClientRect();
+      var offset = Math.round(rect.top);
+      
+      if(offset === lastOffset || lastOffset === -1) {
+        line.push(span);
+      } else {
+        if(line.length > 0) lines.push(line);
+        line = [span];
+      }
+      lastOffset = offset;
+    }
+    
+    if(line.length > 0) lines.push(line);
+    return lines;
+  }
+
+  var detector = {
+      wrapWordsInElement: wrapWordsInElement
+    , wrapWordsInChildElement: wrapWordsInChildElement
+    , getLines: getLines
+  };
+
+  if(typeof define == 'function') {
+    define(function() {
+      return detector; 
+    });
+  }
+  else {
+    window.lineWrapDetector = detector;
+  }
+
+})();
+
+
+(function() {
 'use strict';
 
 // Configuration
