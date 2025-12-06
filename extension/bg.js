@@ -12,6 +12,23 @@ function isRestrictedUrl(url) {
 		url.startsWith('data:');
 }
 
+// Extract domain from URL
+function getDomainFromUrl(url) {
+	try {
+		const urlObj = new URL(url);
+		return urlObj.hostname;
+	} catch (e) {
+		return null;
+	}
+}
+
+// Check if domain is in blacklist
+async function isDomainBlacklisted(domain) {
+	if (!domain) return false;
+	const result = await chrome.storage.local.get({ domainBlacklist: [] });
+	return result.domainBlacklist.includes(domain);
+}
+
 chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
 	// Only inject when page has fully loaded
 	if (changeInfo.status !== 'complete') return;
@@ -21,13 +38,20 @@ chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
 		return;
 	}
 	
+	// Check if domain is blacklisted
+	const domain = getDomainFromUrl(tab.url);
+	if (domain && await isDomainBlacklisted(domain)) {
+		return;
+	}
+	
 	try {
 		const result = await chrome.storage.local.get({
 			color1: "#0000FF",
 			color2: "#FF0000",
 			color_text: "#000000",
 			gradient_size: 50,
-			enabled: false
+			enabled: false,
+			domainBlacklist: []
 		});
 		
 		// When the page loads, inject the content script

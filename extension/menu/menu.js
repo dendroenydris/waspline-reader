@@ -8,6 +8,17 @@ const enabled = document.getElementById('enabled');
 const popupContent = document.getElementById('popup-content');
 const errorContent = document.getElementById('error-content');
 
+// Domain blacklist elements
+const currentDomainName = document.getElementById('current-domain-name');
+const toggleDomainBtn = document.getElementById('toggle-domain-btn');
+const newDomainInput = document.getElementById('new-domain-input');
+const addDomainBtn = document.getElementById('add-domain-btn');
+const blacklistContainer = document.getElementById('blacklist-container');
+const domainDisabledNotice = document.getElementById('domain-disabled-notice');
+
+// Current page domain
+let currentDomain = null;
+
 // Check if URL is restricted (cannot inject content scripts)
 function isRestrictedUrl(url) {
 	if (!url) return true;
@@ -20,6 +31,113 @@ function isRestrictedUrl(url) {
 		url.startsWith('devtools://') ||
 		url.startsWith('view-source:') ||
 		url.startsWith('data:');
+}
+
+// Extract domain from URL
+function getDomainFromUrl(url) {
+	try {
+		const urlObj = new URL(url);
+		return urlObj.hostname;
+	} catch (e) {
+		return null;
+	}
+}
+
+// Check if domain is in blacklist
+async function isDomainBlacklisted(domain) {
+	if (!domain) return false;
+	const result = await chrome.storage.local.get({ domainBlacklist: [] });
+	return result.domainBlacklist.includes(domain);
+}
+
+// Get blacklist from storage
+async function getBlacklist() {
+	const result = await chrome.storage.local.get({ domainBlacklist: [] });
+	return result.domainBlacklist;
+}
+
+// Save blacklist to storage
+async function saveBlacklist(blacklist) {
+	await chrome.storage.local.set({ domainBlacklist: blacklist });
+}
+
+// Add domain to blacklist
+async function addToBlacklist(domain) {
+	if (!domain) return;
+	domain = domain.toLowerCase().trim();
+	if (!domain) return;
+	
+	const blacklist = await getBlacklist();
+	if (!blacklist.includes(domain)) {
+		blacklist.push(domain);
+		await saveBlacklist(blacklist);
+	}
+	await updateBlacklistUI();
+	await updateCurrentDomainUI();
+}
+
+// Remove domain from blacklist
+async function removeFromBlacklist(domain) {
+	const blacklist = await getBlacklist();
+	const index = blacklist.indexOf(domain);
+	if (index > -1) {
+		blacklist.splice(index, 1);
+		await saveBlacklist(blacklist);
+	}
+	await updateBlacklistUI();
+	await updateCurrentDomainUI();
+}
+
+// Update the blacklist UI
+async function updateBlacklistUI() {
+	const blacklist = await getBlacklist();
+	
+	if (blacklist.length === 0) {
+		blacklistContainer.innerHTML = '<div class="empty-list">No disabled sites</div>';
+		return;
+	}
+	
+	blacklistContainer.innerHTML = blacklist.map(domain => `
+		<div class="blacklist-item">
+			<span class="blacklist-domain" title="${domain}">${domain}</span>
+			<span class="remove-btn" data-domain="${domain}" title="Remove">×</span>
+		</div>
+	`).join('');
+	
+	// Add click handlers for remove buttons
+	blacklistContainer.querySelectorAll('.remove-btn').forEach(btn => {
+		btn.addEventListener('click', async (e) => {
+			const domain = e.target.getAttribute('data-domain');
+			await removeFromBlacklist(domain);
+		});
+	});
+}
+
+// Update current domain UI
+async function updateCurrentDomainUI() {
+	if (!currentDomain) {
+		currentDomainName.textContent = '-';
+		toggleDomainBtn.classList.add('hidden');
+		domainDisabledNotice.classList.add('hidden');
+		return;
+	}
+	
+	currentDomainName.textContent = currentDomain;
+	toggleDomainBtn.classList.remove('hidden');
+	
+	const isBlacklisted = await isDomainBlacklisted(currentDomain);
+	
+	if (isBlacklisted) {
+		toggleDomainBtn.textContent = 'Enable here';
+		toggleDomainBtn.classList.remove('btn-danger');
+		toggleDomainBtn.classList.add('btn-success');
+		domainDisabledNotice.classList.remove('hidden');
+	} else {
+		toggleDomainBtn.textContent = 'Disable here';
+		toggleDomainBtn.classList.remove('btn-success');
+		toggleDomainBtn.classList.add('btn-danger');
+		domainDisabledNotice.classList.add('hidden');
+	}
 }
 
 // Show error message for restricted pages
@@ -53,6 +171,12 @@ async function ensureContentScriptInjected(tabId) {
 // Listen for clicks on the input elements, and send the appropriate message
 // to the content script in the page.
 async function eventHandler(e) {
+	// Check if current domain is blacklisted
+	if (currentDomain && await isDomainBlacklisted(currentDomain)) {
+		// Don't apply gradient on blacklisted domains
+		return;
+	}
+
 	// Send message to content script to color lines
 	async function apply_gradient(tabs) {
 		if (!tabs || tabs.length === 0) return;
@@ -61,6 +185,12 @@ async function eventHandler(e) {
 		// Check if this is a restricted URL
 		if (isRestrictedUrl(tab.url)) {
 			showRestrictedPageError();
+			return;
+		}
+		
+		// Check if domain is blacklisted
+		const domain = getDomainFromUrl(tab.url);
+		if (domain && await isDomainBlacklisted(domain)) {
 			return;
 		}
 		
@@ -128,13 +258,44 @@ async function eventHandler(e) {
 async function checkCurrentPage() {
 	try {
 		const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-		if (tabs && tabs.length > 0 && isRestrictedUrl(tabs[0].url)) {
-			showRestrictedPageError();
-		} else {
+		if (tabs && tabs.length > 0) {
+			const tab = tabs[0];
+			
+			if (isRestrictedUrl(tab.url)) {
+				showRestrictedPageError();
+				return;
+			}
+			
 			showNormalContent();
+			
+			// Get current domain
+			currentDomain = getDomainFromUrl(tab.url);
+			await updateCurrentDomainUI();
+			await updateBlacklistUI();
 		}
 	} catch (error) {
 		console.error('Error checking current page:', error);
+	}
+}
+
+// Toggle current domain in blacklist
+async function toggleCurrentDomain() {
+	if (!currentDomain) return;
+	
+	const isBlacklisted = await isDomainBlacklisted(currentDomain);
+	if (isBlacklisted) {
+		await removeFromBlacklist(currentDomain);
+	} else {
+		await addToBlacklist(currentDomain);
+	}
+}
+
+// Add new domain from input
+async function addNewDomain() {
+	const domain = newDomainInput.value.trim().toLowerCase();
+	if (domain) {
+		await addToBlacklist(domain);
+		newDomainInput.value = '';
 	}
 }
 
@@ -162,3 +323,12 @@ document.getElementById("gradient_size").addEventListener("change", eventHandler
 document.getElementById("color1").addEventListener("change", eventHandler);
 document.getElementById("color2").addEventListener("change", eventHandler);
 document.getElementById("color_text").addEventListener("change", eventHandler);
+
+// Domain blacklist event listeners
+toggleDomainBtn.addEventListener('click', toggleCurrentDomain);
+addDomainBtn.addEventListener('click', addNewDomain);
+newDomainInput.addEventListener('keypress', (e) => {
+	if (e.key === 'Enter') {
+		addNewDomain();
+	}
+});

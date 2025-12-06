@@ -2,137 +2,151 @@
 'use strict';
 
 // Configuration
-const MAX_PARAGRAPHS = 200; // Limit paragraphs to prevent freezing
-const BATCH_SIZE = 10; // Process paragraphs in batches
+const MAX_PARAGRAPHS = 300;
+const BATCH_SIZE = 20;
+const GRADIENT_STEPS = 10; // Pre-compute gradient colors in steps
 
-// Linear interpolate between v0 and v1 at percent t
-function lerp(v0, v1, t)
-{
-	return v0 * (1 - t) + v1 * t;
+// Cache for parsed colors
+const colorCache = new Map();
+
+// Parse hex to RGB with caching
+function hex_to_rgb(hex) {
+	if (colorCache.has(hex)) return colorCache.get(hex);
+	const result = [
+		parseInt(hex.slice(1, 3), 16),
+		parseInt(hex.slice(3, 5), 16),
+		parseInt(hex.slice(5, 7), 16)
+	];
+	colorCache.set(hex, result);
+	return result;
 }
 
-// Convert a hex triplet (#XXXXXX) to an array containing red, green, and blue
-function hex_to_rgb(hex)
-{
-	return hex.replace('#', '').match(/.{1,2}/g).map(
-		x => parseInt(x, 16)
-	);
+// Pre-compute gradient colors for a line
+function computeGradientColors(baseColor, activeColor, steps, gradientSize) {
+	const colors = new Array(steps);
+	const factor = gradientSize / 50;
+	
+	for (let i = 0; i < steps; i++) {
+		const t = 1 - (i / ((steps - 1) * factor || 1));
+		const r = (baseColor[0] * (1 - t) + activeColor[0] * t) | 0;
+		const g = (baseColor[1] * (1 - t) + activeColor[1] * t) | 0;
+		const b = (baseColor[2] * (1 - t) + activeColor[2] * t) | 0;
+		colors[i] = `rgb(${r},${g},${b})`;
+	}
+	return colors;
 }
 
-// Process a single paragraph
-function processParagraph(paragraph, colors, base_color, gradient_size, startLineno) {
-	let coloridx = Math.floor(startLineno / 2) % colors.length;
-	let lineno = startLineno;
+// Apply colors to a line of spans
+function colorLine(spans, gradientColors, reverse) {
+	const len = spans.length;
+	const colorLen = gradientColors.length;
+	
+	for (let i = 0; i < len; i++) {
+		const idx = reverse ? len - 1 - i : i;
+		const colorIdx = Math.min(Math.floor(i * colorLen / len), colorLen - 1);
+		spans[idx].style.color = gradientColors[colorIdx];
+	}
+}
 
-	try {
-		const lines = lineWrapDetector.getLines(paragraph);
-
-		for (let line of lines) {
-			if (!line || line.length === 0) continue;
+// Process paragraphs in batches using requestAnimationFrame
+function processBatch(paragraphs, startIdx, colors, baseColor, gradientSize, lineno, resolve) {
+	const endIdx = Math.min(startIdx + BATCH_SIZE, paragraphs.length);
+	const activeColors = colors.map(c => hex_to_rgb(c));
+	
+	for (let i = startIdx; i < endIdx; i++) {
+		const paragraph = paragraphs[i];
+		if (!paragraph.textContent || paragraph.textContent.trim().length < 2) continue;
+		
+		try {
+			const lines = lineWrapDetector.getLines(paragraph);
 			
-			// Alternate between left and right for every color
-			const active_color = hex_to_rgb(colors[coloridx]);
-
-			// Flip array around if on left to color correctly
-			const is_left = (lineno % 2 === 0);
-			const orderedLine = is_left ? Array.from(line).reverse() : line;
-
-			// Color lines using lerp of RGB values
-			const lineLen = orderedLine.length;
-			for (let loc = 0; loc < lineLen; loc++) {
-				const t = 1 - (loc / (lineLen * gradient_size / 50));
-				const red = lerp(base_color[0], active_color[0], t) | 0;
-				const green = lerp(base_color[1], active_color[1], t) | 0;
-				const blue = lerp(base_color[2], active_color[2], t) | 0;
-
-				orderedLine[loc].style.color = `rgb(${red},${green},${blue})`;
+			for (const line of lines) {
+				if (!line || line.length === 0) continue;
+				
+				const colorIdx = Math.floor(lineno / 2) % activeColors.length;
+				const isLeft = (lineno % 2 === 0);
+				const gradientColors = computeGradientColors(
+					baseColor, 
+					activeColors[colorIdx], 
+					Math.min(line.length, GRADIENT_STEPS),
+					gradientSize
+				);
+				
+				colorLine(line, gradientColors, isLeft);
+				lineno++;
 			}
-
-			// Increment color index after every left/right pair
-			if (!is_left) {
-				coloridx = (coloridx + 1) % colors.length;
-			}
-			lineno += 1;
+		} catch (e) {
+			// Skip failed paragraphs
 		}
-	} catch (e) {
-		// Skip paragraphs that fail
-		console.warn('Failed to process paragraph:', e);
 	}
 	
-	return lineno;
-}
-
-// Color all lines in the page (async batched processing)
-async function applyGradient(colors, color_text, gradient_size)
-{
-	const allParagraphs = document.getElementsByTagName('p');
-	const paragraphs = Array.from(allParagraphs).slice(0, MAX_PARAGRAPHS);
-	const base_color = hex_to_rgb(color_text);
-	let lineno = 0;
-
-	// Process in batches to prevent UI freeze
-	for (let i = 0; i < paragraphs.length; i += BATCH_SIZE) {
-		const batch = paragraphs.slice(i, i + BATCH_SIZE);
-		
-		for (let paragraph of batch) {
-			// Skip empty or very small paragraphs
-			if (!paragraph.textContent || paragraph.textContent.trim().length < 2) {
-				continue;
-			}
-			lineno = processParagraph(paragraph, colors, base_color, gradient_size, lineno);
-		}
-		
-		// Yield to browser between batches
-		if (i + BATCH_SIZE < paragraphs.length) {
-			await new Promise(resolve => setTimeout(resolve, 0));
-		}
+	if (endIdx < paragraphs.length) {
+		// Continue with next batch on next frame
+		requestAnimationFrame(() => {
+			processBatch(paragraphs, endIdx, colors, baseColor, gradientSize, lineno, resolve);
+		});
+	} else {
+		resolve();
 	}
 }
 
-// Track if processing is in progress
+// Main gradient application function
+function applyGradient(colors, colorText, gradientSize) {
+	return new Promise((resolve) => {
+		const allParagraphs = document.querySelectorAll('p, article p, main p, .content p, .post p, .article p');
+		const paragraphs = Array.from(allParagraphs).slice(0, MAX_PARAGRAPHS);
+		
+		if (paragraphs.length === 0) {
+			resolve();
+			return;
+		}
+		
+		const baseColor = hex_to_rgb(colorText);
+		
+		// Start processing on next animation frame for smooth rendering
+		requestAnimationFrame(() => {
+			processBatch(paragraphs, 0, colors, baseColor, gradientSize, 0, resolve);
+		});
+	});
+}
+
+// Track processing state
 let isProcessing = false;
 
-// Listen for messages from popup and background script
+// Message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	if (message.command === "ping") {
-		// Respond to ping to confirm content script is injected
 		sendResponse({ status: "ok" });
 		return true;
-	} else if (message.command === "apply_gradient") {
+	}
+	
+	if (message.command === "apply_gradient" || message.command === "reset") {
 		if (isProcessing) {
 			sendResponse({ status: "busy" });
 			return true;
 		}
 		
 		isProcessing = true;
-		applyGradient(
-			message.colors, message.color_text, message.gradient_size
-		).then(() => {
-			isProcessing = false;
-			sendResponse({ status: "ok" });
-		}).catch((error) => {
-			isProcessing = false;
-			sendResponse({ status: "error", message: error.message });
-		});
-		return true; // Keep channel open for async response
-	} else if (message.command === "reset") {
-		if (isProcessing) {
-			sendResponse({ status: "busy" });
-			return true;
-		}
+		const colors = message.command === "reset" 
+			? [message.color_text] 
+			: message.colors;
+		const gradientSize = message.command === "reset" 
+			? 0 
+			: message.gradient_size;
 		
-		isProcessing = true;
-		applyGradient(
-			[message.color_text], message.color_text, 0
-		).then(() => {
-			isProcessing = false;
-			sendResponse({ status: "ok" });
-		}).catch((error) => {
-			isProcessing = false;
-			sendResponse({ status: "error", message: error.message });
-		});
+		applyGradient(colors, message.color_text, gradientSize)
+			.then(() => {
+				isProcessing = false;
+				sendResponse({ status: "ok" });
+			})
+			.catch((error) => {
+				isProcessing = false;
+				sendResponse({ status: "error", message: error.message });
+			});
+		
 		return true;
 	}
+	
 	return false;
 });
 
