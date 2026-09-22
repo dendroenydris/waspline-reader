@@ -1,6 +1,6 @@
 {
 	"name": "WaspLine Reader",
-	"version": "1.4.0",
+	"version": "1.4.1",
 	"description": "Read faster using color gradients",
 	"manifest_version": 3,
 	"background": {

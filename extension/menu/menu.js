@@ -67,12 +67,11 @@ async function ensureContentScriptInjected(tabId) {
 	});
 }
 
-async function refreshActiveTab() {
+async function ensureActiveTabPrepared() {
 	if (!currentTab || restrictedPage) return;
 
 	try {
 		await ensureContentScriptInjected(currentTab.id);
-		await chrome.tabs.sendMessage(currentTab.id, { command: 'refresh' });
 	} catch (error) {
 		// The page may have changed while the popup was open.
 	}
@@ -93,11 +92,11 @@ async function loadSettings(migrate) {
 }
 
 async function saveSettings(patch) {
+	await ensureActiveTabPrepared();
 	await chrome.storage.local.set(patch);
 	const next = Object.assign({}, settings, patch);
 	settings = CONFIG.normalizeSettings(next);
 	render();
-	await refreshActiveTab();
 }
 
 async function saveActiveSiteList(list) {
@@ -111,8 +110,8 @@ async function saveActiveSiteList(list) {
 	render();
 
 	try {
+		await ensureActiveTabPrepared();
 		await chrome.storage.local.set(patch);
-		await refreshActiveTab();
 	} catch (error) {
 		settings = previousSettings;
 		render();

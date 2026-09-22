@@ -32,7 +32,6 @@ chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
 
 	try {
 		await ensureContentScriptInjected(tabId);
-		await chrome.tabs.sendMessage(tabId, { command: 'refresh' });
 	} catch (error) {
 		// Restricted or browser-owned pages can reject injection. This is expected.
 	}
