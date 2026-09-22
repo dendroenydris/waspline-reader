@@ -1,198 +1,180 @@
 <!DOCTYPE html>
-
 <html>
 <head>
 	<meta charset="utf-8">
-	<style>
-		html, body {width: 280px; font-family: sans-serif; font-size: 13px;}
-		h1 {
-			background-image: url("/icons/wasp48.png");
-			background-size: contain;
-			background-repeat: no-repeat;
-			font-size: 15pt;
-			padding-left: 1.5em;
-			margin-bottom: 10px;
-		}
-		.hidden {display: none;}
-		#site_display {color: grey; padding-left: 1.5em;} 
-		#gradient_size {width: 200px;}
-		
-		/* Domain blacklist styles */
-		.section {
-			margin: 10px 0;
-			padding: 8px 0;
-			border-top: 1px solid #eee;
-		}
-		.section-title {
-			font-weight: bold;
-			margin-bottom: 8px;
-			color: #333;
-		}
-		#current-domain {
-			display: flex;
-			align-items: center;
-			gap: 8px;
-			margin-bottom: 8px;
-			padding: 6px 8px;
-			background: #f5f5f5;
-			border-radius: 4px;
-		}
-		#current-domain-name {
-			flex: 1;
-			font-family: monospace;
-			font-size: 12px;
-			color: #666;
-			overflow: hidden;
-			text-overflow: ellipsis;
-			white-space: nowrap;
-		}
-		.btn {
-			padding: 4px 8px;
-			border: 1px solid #ccc;
-			border-radius: 4px;
-			background: #fff;
-			cursor: pointer;
-			font-size: 12px;
-		}
-		.btn:hover {
-			background: #f0f0f0;
-		}
-		.btn-danger {
-			color: #c00;
-			border-color: #c00;
-		}
-		.btn-danger:hover {
-			background: #fee;
-		}
-		.btn-success {
-			color: #080;
-			border-color: #080;
-		}
-		.btn-success:hover {
-			background: #efe;
-		}
-		#add-domain-form {
-			display: flex;
-			gap: 4px;
-			margin-bottom: 8px;
-		}
-		#new-domain-input {
-			flex: 1;
-			padding: 4px 8px;
-			border: 1px solid #ccc;
-			border-radius: 4px;
-			font-size: 12px;
-		}
-		#blacklist-container {
-			max-height: 120px;
-			overflow-y: auto;
-			border: 1px solid #eee;
-			border-radius: 4px;
-		}
-		.blacklist-item {
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			padding: 4px 8px;
-			border-bottom: 1px solid #eee;
-		}
-		.blacklist-item:last-child {
-			border-bottom: none;
-		}
-		.blacklist-domain {
-			font-family: monospace;
-			font-size: 11px;
-			color: #666;
-			overflow: hidden;
-			text-overflow: ellipsis;
-			white-space: nowrap;
-			flex: 1;
-		}
-		.remove-btn {
-			color: #c00;
-			cursor: pointer;
-			padding: 2px 6px;
-			font-size: 14px;
-		}
-		.remove-btn:hover {
-			background: #fee;
-			border-radius: 3px;
-		}
-		.empty-list {
-			color: #999;
-			font-style: italic;
-			padding: 8px;
-			text-align: center;
-		}
-		.domain-disabled-notice {
-			background: #fff3cd;
-			border: 1px solid #ffc107;
-			border-radius: 4px;
-			padding: 8px;
-			margin-bottom: 10px;
-			color: #856404;
-			font-size: 12px;
-		}
-	</style>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>WaspLine Reader</title>
+	<link rel="stylesheet" href="menu.css">
 </head>
-
 <body>
-	<div id="popup-content">
-		<h1>WaspLine Reader</h1>
+	<main class="app-shell">
+		<header class="topbar">
+			<button id="back-btn" class="icon-button hidden" type="button" aria-label="Back to reader">
+				<svg viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M15 18l-6-6 6-6"></path>
+				</svg>
+			</button>
 
-		<div id="domain-disabled-notice" class="domain-disabled-notice hidden">
-			⚠️ WaspLine is disabled on this site
-		</div>
-
-		<div>
-		<input type="checkbox" id="enabled" name="enabled">
-		<label for="enabled">Enable WaspLine</label>
-		</div><br />
-		
-		<div>
-		<label for="gradient_size">Gradient Size (%)</label>
-		<input type="range" id="gradient_size" name="gradient_size" min="0" max="100" value="10">
-		</div>
-
-		<div>
-		<input type="color" id="color1" name="color1" value="#0000FF">
-		<label for="color1">Color 1</label><br />
-		</div>
-
-		<div>
-		<input type="color" id="color2" name="color2" value="#FF0000">
-		<label for="color2">Color 2</label>
-		</div>
-
-		<div>
-		<input type="color" id="color_text" name="color_text" value="#000000">
-		<label for="color_text">Text Color</label>
-		</div>
-
-		<!-- Domain Blacklist Section -->
-		<div class="section">
-			<div class="section-title">🚫 Disabled Sites</div>
-			
-			<div id="current-domain">
-				<span id="current-domain-name">-</span>
-				<button id="toggle-domain-btn" class="btn btn-danger">Disable here</button>
+			<div class="title-wrap">
+				<img id="brand-icon" class="brand-icon" src="/icons/wasp48.png" alt="">
+				<div>
+					<div id="view-title" class="view-title">WaspLine</div>
+					<div id="view-subtitle" class="view-subtitle">Reader</div>
+				</div>
 			</div>
 
-			<div id="add-domain-form">
-				<input type="text" id="new-domain-input" placeholder="example.com">
-				<button id="add-domain-btn" class="btn">Add</button>
+			<button id="settings-btn" class="icon-button" type="button" aria-label="Open settings">
+				<svg viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z"></path>
+					<path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.4v-.1A1.7 1.7 0 0 0 9 19.8a1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 3.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H1.8V9.4h.1A1.7 1.7 0 0 0 3 9a1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.06 3.2l.06.06A1.7 1.7 0 0 0 8 3.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1v-.1h4.2v.1A1.7 1.7 0 0 0 14 3a1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 8c.12.38.33.73.6 1 .3.27.68.4 1.1.4h.1v4.2h-.1a1.7 1.7 0 0 0-1.1.4c-.27.27-.48.62-.6 1z"></path>
+				</svg>
+			</button>
+		</header>
+
+		<section id="main-view" class="view">
+			<div class="primary-card">
+				<div>
+					<div class="control-title">Reading gradient</div>
+					<div id="reader-status" class="control-caption">Off</div>
+				</div>
+				<label class="switch" aria-label="Enable WaspLine Reader">
+					<input id="enabled" type="checkbox">
+					<span class="switch-track"><span class="switch-knob"></span></span>
+				</label>
 			</div>
 
-			<div id="blacklist-container">
-				<div class="empty-list">No disabled sites</div>
+			<div id="site-card" class="site-card">
+				<span id="current-domain-name" class="domain-name">Loading…</span>
+				<button id="toggle-site-btn" class="site-action danger" type="button">Disable</button>
 			</div>
-		</div>
-		
-	</div>
-	<div id="error-content" class="hidden">
-		<p>Can't use WaspLine Reader on this web page.</p>
-	</div>
+
+			<div class="control-block">
+				<div class="range-heading">
+					<div>
+						<div class="control-title">Gradient reach</div>
+						<div class="control-caption">How far each color travels across a line.</div>
+					</div>
+					<output id="gradient-value" for="gradient_size">50%</output>
+				</div>
+				<input id="gradient_size" type="range" min="0" max="100" value="50">
+			</div>
+
+			<div id="theme-summary" class="theme-summary">
+				<span class="summary-label">Theme</span>
+				<button id="theme-summary-name" class="summary-choice" type="button" title="Change theme">Studio</button>
+				<span class="summary-separator">·</span>
+				<button id="appearance-summary" class="summary-choice" type="button" title="Change appearance">Auto</button>
+			</div>
+
+			<div id="restricted-note" class="notice hidden">
+				WaspLine cannot edit browser-owned pages, but you can still change your settings.
+			</div>
+		</section>
+
+		<section id="settings-view" class="view hidden">
+			<section class="settings-section">
+				<div class="section-heading">
+					<h2>Appearance</h2>
+					<p>Auto follows macOS. Page matching can override very light or dark pages.</p>
+				</div>
+				<div id="appearance-control" class="segmented-control" role="group" aria-label="Appearance">
+					<button type="button" data-appearance="auto">Auto</button>
+					<button type="button" data-appearance="light">Light</button>
+					<button type="button" data-appearance="dark">Dark</button>
+				</div>
+				<label class="setting-toggle">
+					<span>
+						<span class="setting-toggle-title">Match page background</span>
+						<span class="setting-toggle-caption">Switch palette on very light or dark pages.</span>
+					</span>
+					<span class="switch compact-switch">
+						<input id="page-background-auto" type="checkbox">
+						<span class="switch-track"><span class="switch-knob"></span></span>
+					</span>
+				</label>
+				<label class="setting-toggle">
+					<span>
+						<span class="setting-toggle-title">Bold sentence starts</span>
+						<span class="setting-toggle-caption">Emphasize the first words of each segment.</span>
+					</span>
+					<span class="switch compact-switch">
+						<input id="bold-sentence-starts" type="checkbox">
+						<span class="switch-track"><span class="switch-knob"></span></span>
+					</span>
+				</label>
+				<div id="bold-options" class="setting-options">
+					<label class="inline-setting">
+						<span>Words</span>
+						<select id="bold-word-count" aria-label="Number of leading words to bold">
+							<option value="1">1</option>
+							<option value="2">2</option>
+							<option value="3">3</option>
+							<option value="4">4</option>
+							<option value="5">5</option>
+						</select>
+					</label>
+					<div id="bold-boundary-control" class="mini-segmented" role="group" aria-label="Bold segmentation">
+						<button type="button" data-bold-boundary="sentence">Sentence</button>
+						<button type="button" data-bold-boundary="clauses">Clauses</button>
+					</div>
+				</div>
+			</section>
+
+			<section class="settings-section">
+				<div class="section-heading">
+					<h2>Theme</h2>
+					<p>Each preset has a tuned light and dark palette. Body text stays black or white for contrast.</p>
+				</div>
+				<div id="theme-options" class="theme-options"></div>
+
+				<div id="custom-palette-editor" class="custom-palette-editor hidden">
+					<div class="custom-palette-row">
+						<span class="custom-palette-label">Light</span>
+						<label class="color-field">
+							<input id="custom-light-1" type="color" value="#315CFF" aria-label="Custom light accent 1">
+							<span>Accent 1</span>
+						</label>
+						<label class="color-field">
+							<input id="custom-light-2" type="color" value="#E01F70" aria-label="Custom light accent 2">
+							<span>Accent 2</span>
+						</label>
+					</div>
+					<div class="custom-palette-row">
+						<span class="custom-palette-label">Dark</span>
+						<label class="color-field">
+							<input id="custom-dark-1" type="color" value="#7FA8FF" aria-label="Custom dark accent 1">
+							<span>Accent 1</span>
+						</label>
+						<label class="color-field">
+							<input id="custom-dark-2" type="color" value="#E58AB6" aria-label="Custom dark accent 2">
+							<span>Accent 2</span>
+						</label>
+					</div>
+				</div>
+			</section>
+
+			<section class="settings-section sites-section">
+				<div class="section-heading">
+					<h2>Sites</h2>
+					<p id="site-mode-description">Enabled by default. Sites in this list are off.</p>
+				</div>
+
+				<div id="site-mode-control" class="segmented-control" role="group" aria-label="Website mode">
+					<button type="button" data-site-mode="disable">Disable list</button>
+					<button type="button" data-site-mode="enable">Enable list</button>
+				</div>
+
+				<form id="add-domain-form" class="domain-form">
+					<input id="new-domain-input" type="text" inputmode="url" autocomplete="off" placeholder="example.com" aria-label="Website domain">
+					<button id="add-domain-btn" class="secondary-button" type="submit">Add</button>
+				</form>
+
+				<div id="site-list" class="site-list" aria-live="polite"></div>
+			</section>
+		</section>
+	</main>
+
+	<script src="/shared.js"></script>
 	<script src="menu.js"></script>
 </body>
-
 </html>

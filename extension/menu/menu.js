@@ -1,334 +1,452 @@
 'use strict';
-// Define references to DOM elements
-const color1 = document.getElementById('color1');
-const color2 = document.getElementById('color2');
-const color_text = document.getElementById('color_text');
-const gradient_size = document.getElementById('gradient_size');
+
+const CONFIG = globalThis.WaspLineConfig;
+
 const enabled = document.getElementById('enabled');
-const popupContent = document.getElementById('popup-content');
-const errorContent = document.getElementById('error-content');
-
-// Domain blacklist elements
+const gradientSize = document.getElementById('gradient_size');
+const gradientValue = document.getElementById('gradient-value');
+const settingsBtn = document.getElementById('settings-btn');
+const backBtn = document.getElementById('back-btn');
+const brandIcon = document.getElementById('brand-icon');
+const viewTitle = document.getElementById('view-title');
+const viewSubtitle = document.getElementById('view-subtitle');
+const mainView = document.getElementById('main-view');
+const settingsView = document.getElementById('settings-view');
 const currentDomainName = document.getElementById('current-domain-name');
-const toggleDomainBtn = document.getElementById('toggle-domain-btn');
+const toggleSiteBtn = document.getElementById('toggle-site-btn');
+const restrictedNote = document.getElementById('restricted-note');
+const themeSummaryName = document.getElementById('theme-summary-name');
+const appearanceSummary = document.getElementById('appearance-summary');
+const appearanceControl = document.getElementById('appearance-control');
+const pageBackgroundAuto = document.getElementById('page-background-auto');
+const boldSentenceStarts = document.getElementById('bold-sentence-starts');
+const boldOptions = document.getElementById('bold-options');
+const boldWordCount = document.getElementById('bold-word-count');
+const boldBoundaryControl = document.getElementById('bold-boundary-control');
+const themeOptions = document.getElementById('theme-options');
+const customPaletteEditor = document.getElementById('custom-palette-editor');
+const customLight1 = document.getElementById('custom-light-1');
+const customLight2 = document.getElementById('custom-light-2');
+const customDark1 = document.getElementById('custom-dark-1');
+const customDark2 = document.getElementById('custom-dark-2');
+const siteModeControl = document.getElementById('site-mode-control');
+const siteModeDescription = document.getElementById('site-mode-description');
+const addDomainForm = document.getElementById('add-domain-form');
 const newDomainInput = document.getElementById('new-domain-input');
-const addDomainBtn = document.getElementById('add-domain-btn');
-const blacklistContainer = document.getElementById('blacklist-container');
-const domainDisabledNotice = document.getElementById('domain-disabled-notice');
+const siteList = document.getElementById('site-list');
 
-// Current page domain
-let currentDomain = null;
+let settings = CONFIG.normalizeSettings({});
+let currentTab = null;
+let currentDomain = '';
+let restrictedPage = false;
 
-// Check if URL is restricted (cannot inject content scripts)
 function isRestrictedUrl(url) {
 	if (!url) return true;
-	return url.startsWith('chrome://') ||
-		url.startsWith('chrome-extension://') ||
-		url.startsWith('edge://') ||
-		url.startsWith('about:') ||
-		url.startsWith('moz-extension://') ||
-		url.startsWith('file://') ||
-		url.startsWith('devtools://') ||
-		url.startsWith('view-source:') ||
-		url.startsWith('data:');
+	return url.startsWith('chrome://')
+		|| url.startsWith('chrome-extension://')
+		|| url.startsWith('edge://')
+		|| url.startsWith('about:')
+		|| url.startsWith('moz-extension://')
+		|| url.startsWith('file://')
+		|| url.startsWith('devtools://')
+		|| url.startsWith('view-source:')
+		|| url.startsWith('data:');
 }
 
-// Extract domain from URL
-function getDomainFromUrl(url) {
-	try {
-		const urlObj = new URL(url);
-		return urlObj.hostname;
-	} catch (e) {
-		return null;
-	}
-}
-
-// Check if domain is in blacklist
-async function isDomainBlacklisted(domain) {
-	if (!domain) return false;
-	const result = await chrome.storage.local.get({ domainBlacklist: [] });
-	return result.domainBlacklist.includes(domain);
-}
-
-// Get blacklist from storage
-async function getBlacklist() {
-	const result = await chrome.storage.local.get({ domainBlacklist: [] });
-	return result.domainBlacklist;
-}
-
-// Save blacklist to storage
-async function saveBlacklist(blacklist) {
-	await chrome.storage.local.set({ domainBlacklist: blacklist });
-}
-
-// Add domain to blacklist
-async function addToBlacklist(domain) {
-	if (!domain) return;
-	domain = domain.toLowerCase().trim();
-	if (!domain) return;
-	
-	const blacklist = await getBlacklist();
-	if (!blacklist.includes(domain)) {
-		blacklist.push(domain);
-		await saveBlacklist(blacklist);
-	}
-	await updateBlacklistUI();
-	await updateCurrentDomainUI();
-}
-
-// Remove domain from blacklist
-async function removeFromBlacklist(domain) {
-	const blacklist = await getBlacklist();
-	const index = blacklist.indexOf(domain);
-	if (index > -1) {
-		blacklist.splice(index, 1);
-		await saveBlacklist(blacklist);
-	}
-	await updateBlacklistUI();
-	await updateCurrentDomainUI();
-}
-
-// Update the blacklist UI
-async function updateBlacklistUI() {
-	const blacklist = await getBlacklist();
-	
-	if (blacklist.length === 0) {
-		blacklistContainer.innerHTML = '<div class="empty-list">No disabled sites</div>';
-		return;
-	}
-	
-	blacklistContainer.innerHTML = blacklist.map(domain => `
-		<div class="blacklist-item">
-			<span class="blacklist-domain" title="${domain}">${domain}</span>
-			<span class="remove-btn" data-domain="${domain}" title="Remove">×</span>
-		</div>
-	`).join('');
-	
-	// Add click handlers for remove buttons
-	blacklistContainer.querySelectorAll('.remove-btn').forEach(btn => {
-		btn.addEventListener('click', async (e) => {
-			const domain = e.target.getAttribute('data-domain');
-			await removeFromBlacklist(domain);
-		});
-	});
-}
-
-// Update current domain UI
-async function updateCurrentDomainUI() {
-	if (!currentDomain) {
-		currentDomainName.textContent = '-';
-		toggleDomainBtn.classList.add('hidden');
-		domainDisabledNotice.classList.add('hidden');
-		return;
-	}
-	
-	currentDomainName.textContent = currentDomain;
-	toggleDomainBtn.classList.remove('hidden');
-	
-	const isBlacklisted = await isDomainBlacklisted(currentDomain);
-	
-	if (isBlacklisted) {
-		toggleDomainBtn.textContent = 'Enable here';
-		toggleDomainBtn.classList.remove('btn-danger');
-		toggleDomainBtn.classList.add('btn-success');
-		domainDisabledNotice.classList.remove('hidden');
-	} else {
-		toggleDomainBtn.textContent = 'Disable here';
-		toggleDomainBtn.classList.remove('btn-success');
-		toggleDomainBtn.classList.add('btn-danger');
-		domainDisabledNotice.classList.add('hidden');
-	}
-}
-
-// Show error message for restricted pages
-function showRestrictedPageError() {
-	if (popupContent) popupContent.classList.add('hidden');
-	if (errorContent) errorContent.classList.remove('hidden');
-}
-
-// Show normal popup content
-function showNormalContent() {
-	if (popupContent) popupContent.classList.remove('hidden');
-	if (errorContent) errorContent.classList.add('hidden');
-}
-
-// Inject content script if not already injected
 async function ensureContentScriptInjected(tabId) {
 	try {
-		// Try to send a ping message to check if content script is already injected
-		await chrome.tabs.sendMessage(tabId, { command: "ping" });
+		await chrome.tabs.sendMessage(tabId, { command: 'ping' });
+		return;
 	} catch (error) {
-		// Content script not injected, inject it now
-		await chrome.scripting.executeScript({
-			target: { tabId: tabId },
-			files: ["/contentScript.js"]
-		});
-		// Small delay to ensure script is ready
-		await new Promise(resolve => setTimeout(resolve, 100));
+		// Inject below.
+	}
+
+	await chrome.scripting.executeScript({
+		target: { tabId: tabId },
+		files: ['/shared.js', '/contentScript.js']
+	});
+}
+
+async function refreshActiveTab() {
+	if (!currentTab || restrictedPage) return;
+
+	try {
+		await ensureContentScriptInjected(currentTab.id);
+		await chrome.tabs.sendMessage(currentTab.id, { command: 'refresh' });
+	} catch (error) {
+		// The page may have changed while the popup was open.
 	}
 }
 
-// Listen for clicks on the input elements, and send the appropriate message
-// to the content script in the page.
-async function eventHandler(e) {
-	// Check if current domain is blacklisted
-	if (currentDomain && await isDomainBlacklisted(currentDomain)) {
-		// Don't apply gradient on blacklisted domains
+async function loadSettings(migrate) {
+	const raw = await chrome.storage.local.get(null);
+	settings = CONFIG.normalizeSettings(raw);
+
+	const hasSeparatedLists = Array.isArray(raw.disabledSites) || Array.isArray(raw.enabledSites);
+	const hasLegacyList = Array.isArray(raw.siteList) || Array.isArray(raw.domainBlacklist);
+	if (migrate && !hasSeparatedLists && hasLegacyList) {
+		const listKey = settings.siteMode === 'disable' ? 'disabledSites' : 'enabledSites';
+		const patch = {};
+		patch[listKey] = settings.siteList;
+		await chrome.storage.local.set(patch);
+	}
+}
+
+async function saveSettings(patch) {
+	await chrome.storage.local.set(patch);
+	const next = Object.assign({}, settings, patch);
+	settings = CONFIG.normalizeSettings(next);
+	render();
+	await refreshActiveTab();
+}
+
+async function saveActiveSiteList(list) {
+	const listKey = settings.siteMode === 'disable' ? 'disabledSites' : 'enabledSites';
+	const normalizedList = CONFIG.normalizeSiteList(list);
+	const previousSettings = settings;
+	const patch = {};
+	patch[listKey] = normalizedList;
+
+	settings = CONFIG.normalizeSettings(Object.assign({}, settings, patch));
+	render();
+
+	try {
+		await chrome.storage.local.set(patch);
+		await refreshActiveTab();
+	} catch (error) {
+		settings = previousSettings;
+		render();
+		throw error;
+	}
+}
+
+function setView(name) {
+	const showingSettings = name === 'settings';
+	mainView.classList.toggle('hidden', showingSettings);
+	settingsView.classList.toggle('hidden', !showingSettings);
+	backBtn.classList.toggle('hidden', !showingSettings);
+	settingsBtn.classList.toggle('hidden', showingSettings);
+	brandIcon.classList.toggle('hidden', showingSettings);
+	viewTitle.textContent = showingSettings ? 'Settings' : 'WaspLine';
+	viewSubtitle.textContent = showingSettings ? 'Reader preferences' : 'Reader';
+}
+
+function titleCase(value) {
+	return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function cycleTheme() {
+	const themes = Object.keys(CONFIG.THEMES);
+	const index = themes.indexOf(settings.theme);
+	const next = themes[(index + 1) % themes.length];
+	saveSettings({ theme: next });
+}
+
+function cycleAppearance() {
+	const modes = ['auto', 'light', 'dark'];
+	const index = modes.indexOf(settings.appearance);
+	const next = modes[(index + 1) % modes.length];
+	saveSettings({ appearance: next });
+}
+
+function updateUiAppearance() {
+	if (settings.appearance === 'auto') {
+		delete document.body.dataset.uiScheme;
+	} else {
+		document.body.dataset.uiScheme = settings.appearance;
+	}
+}
+
+function renderSegmentedControl(container, attribute, value) {
+	container.querySelectorAll('button').forEach(function(button) {
+		const selected = button.getAttribute(attribute) === value;
+		button.classList.toggle('selected', selected);
+		button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+	});
+}
+
+function renderThemeOptions() {
+	themeOptions.replaceChildren();
+
+	Object.keys(CONFIG.THEMES).forEach(function(key) {
+		const theme = CONFIG.THEMES[key];
+		const button = document.createElement('button');
+		button.type = 'button';
+		button.className = 'theme-card' + (settings.theme === key ? ' selected' : '');
+		button.dataset.theme = key;
+		button.setAttribute('aria-pressed', settings.theme === key ? 'true' : 'false');
+
+		const copy = document.createElement('span');
+		copy.className = 'theme-copy';
+
+		const name = document.createElement('span');
+		name.className = 'theme-name';
+		name.textContent = theme.name;
+
+		const description = document.createElement('span');
+		description.className = 'theme-description';
+		description.textContent = theme.description;
+
+		copy.appendChild(name);
+		copy.appendChild(document.createElement('br'));
+		copy.appendChild(description);
+
+		const preview = document.createElement('span');
+		preview.className = 'palette-preview';
+
+		['light', 'dark'].forEach(function(scheme) {
+			const palette = document.createElement('span');
+			palette.className = 'palette ' + scheme;
+
+			const previewColors = CONFIG.getPalette(key, scheme, settings);
+			[previewColors.color1, previewColors.color2].forEach(function(color) {
+				const swatch = document.createElement('span');
+				swatch.className = 'swatch';
+				swatch.style.backgroundColor = color;
+				palette.appendChild(swatch);
+			});
+
+			preview.appendChild(palette);
+		});
+
+		button.appendChild(copy);
+		button.appendChild(preview);
+		button.addEventListener('click', function() {
+			saveSettings({ theme: key });
+		});
+
+		themeOptions.appendChild(button);
+	});
+}
+
+function siteIsListed(domain) {
+	return settings.siteList.includes(CONFIG.normalizeDomain(domain));
+}
+
+function renderCurrentSite() {
+	if (restrictedPage || !currentDomain) {
+		currentDomainName.textContent = 'Browser page';
+		toggleSiteBtn.disabled = true;
+		toggleSiteBtn.textContent = 'Unavailable';
+		restrictedNote.classList.remove('hidden');
 		return;
 	}
 
-	// Send message to content script to color lines
-	async function apply_gradient(tabs) {
-		if (!tabs || tabs.length === 0) return;
-		const tab = tabs[0];
-		
-		// Check if this is a restricted URL
-		if (isRestrictedUrl(tab.url)) {
-			showRestrictedPageError();
-			return;
-		}
-		
-		// Check if domain is blacklisted
-		const domain = getDomainFromUrl(tab.url);
-		if (domain && await isDomainBlacklisted(domain)) {
-			return;
-		}
-		
-		try {
-			// Ensure content script is injected before sending message
-			await ensureContentScriptInjected(tab.id);
-			await chrome.tabs.sendMessage(tab.id, {
-				command: "apply_gradient",
-				colors: [color1.value, color2.value],
-				color_text: color_text.value,
-				gradient_size: gradient_size.value
-			});
-		} catch (error) {
-			console.error('Error applying gradient:', error);
-			showRestrictedPageError();
-		}
+	restrictedNote.classList.add('hidden');
+	toggleSiteBtn.disabled = false;
+	currentDomainName.textContent = currentDomain;
+
+	const listed = siteIsListed(currentDomain);
+	const willEnable = settings.siteMode === 'disable' ? listed : !listed;
+
+	toggleSiteBtn.textContent = willEnable ? 'Enable' : 'Disable';
+	toggleSiteBtn.classList.toggle('positive', willEnable);
+	toggleSiteBtn.classList.toggle('danger', !willEnable);
+	toggleSiteBtn.setAttribute(
+		'aria-label',
+		(willEnable ? 'Enable ' : 'Disable ') + currentDomain
+	);
+}
+
+function renderSiteList() {
+	siteList.replaceChildren();
+
+
+	if (settings.siteList.length === 0) {
+		const empty = document.createElement('div');
+		empty.className = 'empty-list';
+		empty.textContent = settings.siteMode === 'disable'
+			? 'No sites are disabled.'
+			: 'No sites are enabled yet.';
+		siteList.appendChild(empty);
+		return;
 	}
 
-	// Send message to content script to reset lines
-	async function reset(tabs) {
-		if (!tabs || tabs.length === 0) return;
-		const tab = tabs[0];
-		
-		// Check if this is a restricted URL
-		if (isRestrictedUrl(tab.url)) {
-			showRestrictedPageError();
-			return;
-		}
-		
-		try {
-			// Ensure content script is injected before sending message
-			await ensureContentScriptInjected(tab.id);
-			await chrome.tabs.sendMessage(tab.id, {
-				command: "reset",
-				color_text: color_text.value
-			});
-		} catch (error) {
-			console.error('Error resetting:', error);
-		}
-	}
+	settings.siteList.forEach(function(domain) {
+		const row = document.createElement('div');
+		row.className = 'site-list-row';
 
-	// Store attributes into local storage
-	await chrome.storage.local.set({
-		color1: color1.value,
-		color2: color2.value,
-		color_text: color_text.value,
-		gradient_size: gradient_size.value,
-		enabled: enabled.checked,
+		const label = document.createElement('span');
+		label.className = 'site-list-domain';
+		label.textContent = domain;
+		label.title = domain;
+
+		const remove = document.createElement('button');
+		remove.type = 'button';
+		remove.className = 'remove-site';
+		remove.textContent = '×';
+		remove.setAttribute('aria-label', 'Remove ' + domain);
+		remove.addEventListener('click', function() {
+			const next = settings.siteList.filter(function(item) { return item !== domain; });
+			saveActiveSiteList(next);
+		});
+
+		row.appendChild(label);
+		row.appendChild(remove);
+		siteList.appendChild(row);
 	});
-
-	// Dispatch depending on checkbox enabled state
-	try {
-		const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-		if (enabled.checked) {
-			await apply_gradient(tabs);
-		} else {
-			await reset(tabs);
-		}
-	} catch (error) {
-		console.error('Error handling event:', error);
-	}
 }
 
-// Check current page on popup open
-async function checkCurrentPage() {
-	try {
-		const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-		if (tabs && tabs.length > 0) {
-			const tab = tabs[0];
-			
-			if (isRestrictedUrl(tab.url)) {
-				showRestrictedPageError();
-				return;
-			}
-			
-			showNormalContent();
-			
-			// Get current domain
-			currentDomain = getDomainFromUrl(tab.url);
-			await updateCurrentDomainUI();
-			await updateBlacklistUI();
-		}
-	} catch (error) {
-		console.error('Error checking current page:', error);
-	}
+function render() {
+	updateUiAppearance();
+
+	enabled.checked = settings.enabled;
+	gradientSize.value = String(settings.gradient_size);
+	gradientValue.textContent = Math.round(settings.gradient_size) + '%';
+
+	const theme = CONFIG.THEMES[settings.theme];
+	themeSummaryName.textContent = theme.name;
+	appearanceSummary.textContent = titleCase(settings.appearance);
+
+	document.getElementById('reader-status').textContent = settings.enabled ? 'On' : 'Off';
+
+	renderCurrentSite();
+	renderSegmentedControl(appearanceControl, 'data-appearance', settings.appearance);
+	pageBackgroundAuto.checked = settings.pageBackgroundAuto;
+	boldSentenceStarts.checked = settings.boldSentenceStarts;
+	boldOptions.classList.toggle('disabled', !settings.boldSentenceStarts);
+	boldWordCount.disabled = !settings.boldSentenceStarts;
+	boldWordCount.value = String(settings.boldWordCount);
+	renderSegmentedControl(boldBoundaryControl, 'data-bold-boundary', settings.boldBoundaryMode);
+	boldBoundaryControl.querySelectorAll('button').forEach(function(button) {
+		button.disabled = !settings.boldSentenceStarts;
+	});
+	renderSegmentedControl(siteModeControl, 'data-site-mode', settings.siteMode);
+	siteModeDescription.textContent = settings.siteMode === 'disable'
+		? 'Enabled by default. Sites in this list are off.'
+		: 'Off by default. Only sites in this list are on.';
+	renderThemeOptions();
+	customPaletteEditor.classList.toggle('hidden', settings.theme !== 'custom');
+	customLight1.value = settings.customLight1;
+	customLight2.value = settings.customLight2;
+	customDark1.value = settings.customDark1;
+	customDark2.value = settings.customDark2;
+	renderSiteList();
 }
 
-// Toggle current domain in blacklist
-async function toggleCurrentDomain() {
-	if (!currentDomain) return;
-	
-	const isBlacklisted = await isDomainBlacklisted(currentDomain);
-	if (isBlacklisted) {
-		await removeFromBlacklist(currentDomain);
+async function toggleCurrentSite() {
+	if (!currentDomain || restrictedPage) return;
+
+	const listed = siteIsListed(currentDomain);
+	let next = settings.siteList.slice();
+
+	if (listed) {
+		next = next.filter(function(item) { return item !== currentDomain; });
 	} else {
-		await addToBlacklist(currentDomain);
+		next.push(currentDomain);
 	}
+
+	await saveActiveSiteList(next);
 }
 
-// Add new domain from input
-async function addNewDomain() {
-	const domain = newDomainInput.value.trim().toLowerCase();
-	if (domain) {
-		await addToBlacklist(domain);
-		newDomainInput.value = '';
+async function addDomain(value, inputElement) {
+	const domain = CONFIG.normalizeDomain(value);
+	if (!domain) {
+		inputElement.setCustomValidity('Enter a valid domain such as example.com');
+		inputElement.reportValidity();
+		return;
 	}
+
+	inputElement.setCustomValidity('');
+	const next = CONFIG.normalizeSiteList(settings.siteList.concat(domain));
+	inputElement.value = '';
+	await saveActiveSiteList(next);
 }
 
-// Run check when popup opens
-checkCurrentPage();
+async function findCurrentTab() {
+	const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+	currentTab = tabs && tabs.length ? tabs[0] : null;
+	restrictedPage = !currentTab || isRestrictedUrl(currentTab.url);
+	currentDomain = restrictedPage ? '' : CONFIG.normalizeDomain(currentTab.url || '');
+}
 
-// Load settings from local storage, or use these defaults
-chrome.storage.local.get({
-	color1: "#0000FF",
-	color2: "#FF0000",
-	color_text: "#000000",
-	gradient_size: 50,
-	enabled: false
-}).then(function(result) {
-	color1.value = result.color1;
-	color2.value = result.color2;
-	color_text.value = result.color_text;
-	gradient_size.value = result.gradient_size;
-	enabled.checked = result.enabled;
+settingsBtn.addEventListener('click', function() {
+	setView('settings');
 });
 
-// Register event listeners to update page when options change
-document.getElementById("enabled").addEventListener("change", eventHandler);
-document.getElementById("gradient_size").addEventListener("change", eventHandler);
-document.getElementById("color1").addEventListener("change", eventHandler);
-document.getElementById("color2").addEventListener("change", eventHandler);
-document.getElementById("color_text").addEventListener("change", eventHandler);
-
-// Domain blacklist event listeners
-toggleDomainBtn.addEventListener('click', toggleCurrentDomain);
-addDomainBtn.addEventListener('click', addNewDomain);
-newDomainInput.addEventListener('keypress', (e) => {
-	if (e.key === 'Enter') {
-		addNewDomain();
-	}
+backBtn.addEventListener('click', function() {
+	setView('main');
 });
+
+enabled.addEventListener('change', function() {
+	saveSettings({ enabled: enabled.checked });
+});
+
+gradientSize.addEventListener('input', function() {
+	gradientValue.textContent = gradientSize.value + '%';
+});
+
+gradientSize.addEventListener('change', function() {
+	saveSettings({ gradient_size: Number(gradientSize.value) });
+});
+
+toggleSiteBtn.addEventListener('click', toggleCurrentSite);
+
+themeSummaryName.addEventListener('click', cycleTheme);
+appearanceSummary.addEventListener('click', cycleAppearance);
+
+appearanceControl.querySelectorAll('button').forEach(function(button) {
+	button.addEventListener('click', function() {
+		saveSettings({ appearance: button.dataset.appearance });
+	});
+});
+
+pageBackgroundAuto.addEventListener('change', function() {
+	saveSettings({ pageBackgroundAuto: pageBackgroundAuto.checked });
+});
+
+boldSentenceStarts.addEventListener('change', function() {
+	saveSettings({ boldSentenceStarts: boldSentenceStarts.checked });
+});
+
+boldWordCount.addEventListener('change', function() {
+	saveSettings({ boldWordCount: Number(boldWordCount.value) });
+});
+
+boldBoundaryControl.querySelectorAll('button').forEach(function(button) {
+	button.addEventListener('click', function() {
+		saveSettings({ boldBoundaryMode: button.dataset.boldBoundary });
+	});
+});
+
+[
+	[customLight1, 'customLight1'],
+	[customLight2, 'customLight2'],
+	[customDark1, 'customDark1'],
+	[customDark2, 'customDark2']
+].forEach(function(entry) {
+	const input = entry[0];
+	const key = entry[1];
+	input.addEventListener('change', function() {
+		const patch = { theme: 'custom' };
+		patch[key] = input.value;
+		saveSettings(patch);
+	});
+});
+
+siteModeControl.querySelectorAll('button').forEach(function(button) {
+	button.addEventListener('click', function() {
+		saveSettings({ siteMode: button.dataset.siteMode });
+	});
+});
+
+addDomainForm.addEventListener('submit', function(event) {
+	event.preventDefault();
+	addDomain(newDomainInput.value, newDomainInput);
+});
+
+
+chrome.storage.onChanged.addListener(async function(changes, areaName) {
+	if (areaName !== 'local') return;
+	await loadSettings(false);
+	render();
+});
+
+(async function init() {
+	await Promise.all([
+		loadSettings(true),
+		findCurrentTab()
+	]);
+	render();
+	setView('main');
+})();

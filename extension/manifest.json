@@ -1,6 +1,6 @@
 {
 	"name": "WaspLine Reader",
-	"version": "1.2.0",
+	"version": "1.4.0",
 	"description": "Read faster using color gradients",
 	"manifest_version": 3,
 	"background": {
@@ -12,7 +12,7 @@
 			"24": "icons/wasp24.png",
 			"32": "icons/wasp32.png"
 		},
-		"default_title": "Apply gradients",
+		"default_title": "WaspLine Reader",
 		"default_popup": "menu/index.html"
 	},
 	"icons": {
@@ -27,7 +27,8 @@
 		"tabs"
 	],
 	"host_permissions": [
-		"http://*/",
-		"https://*/"
+		"http://*/*",
+		"https://*/*"
 	]
 }
+
