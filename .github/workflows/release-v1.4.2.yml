@@ -1,0 +1,67 @@
+name: Publish WaspLine Reader v1.4.2
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/release-v1.4.2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build Chrome unpacked ZIP
+        run: |
+          set -euo pipefail
+          bash build.sh
+          asset="01-WaspLine-Reader-v1.4.2-Chrome-Unpacked.zip"
+          rm -f "$asset"
+          (cd extension && zip -qr "../$asset" . -x '.DS_Store' '*/.DS_Store')
+          unzip -t "$asset"
+          unzip -Z1 "$asset" | grep -qx 'manifest.json'
+          grep -q '"version": "1.4.2"' extension/manifest.json
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset="01-WaspLine-Reader-v1.4.2-Chrome-Unpacked.zip"
+          cat > /tmp/release-notes.md <<'EOF'
+          ## Install
+
+          **The first ZIP asset is the ready-to-use Chrome unpacked extension.**
+
+          1. Download `01-WaspLine-Reader-v1.4.2-Chrome-Unpacked.zip`.
+          2. Unzip it.
+          3. Open `chrome://extensions`.
+          4. Enable **Developer mode**.
+          5. Choose **Load unpacked** and select the unzipped folder.
+
+          The ZIP root contains `manifest.json` directly.
+
+          ## v1.4.2 — compatibility and region-aware styling
+
+          - Preserves third-party word-level rendering from vocabulary/highlighting extensions instead of splitting or overriding their inline wrappers.
+          - Protected inline wrappers keep their own color and font-weight while still participating in WaspLine line measurement.
+          - Adds region-aware background handling for pages with many independent visual areas such as chat bubbles, cards, quote boxes, and side panels.
+          - Multiple paragraphs inside the same visual region share one light/dark palette decision; different regions can use different palettes.
+          - Region background results are cached only within the current small render batch, avoiding a full-page background scan or stale long-lived cache.
+          - Keeps the v1.4.1 viewport-first rendering, small dynamic batches, editable-area protection, streaming support, bold stability, and reduced redundant refresh work.
+          - Further reduces rendering overhead by reusing paragraph snapshots, limiting geometry reads during viewport prioritization, and gating full refreshes on real appearance changes.
+          EOF
+
+          if gh release view v1.4.2 >/dev/null 2>&1; then
+            gh release upload v1.4.2 "$asset" --clobber
+          else
+            gh release create v1.4.2 "$asset" \
+              --title "WaspLine Reader v1.4.2" \
+              --notes-file /tmp/release-notes.md
+          fi
