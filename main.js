@@ -22,6 +22,8 @@ let latestSettings = null;
 let contentRefreshTimer = null;
 let viewportRefreshTimer = null;
 let lastViewportSignature = '';
+let appearanceCheckTimer = null;
+let lastResolvedScheme = null;
 const pendingParagraphs = new Set();
 
 const EDITABLE_SELECTOR = [
@@ -44,11 +46,102 @@ function isEditableRegion(element) {
 }
 
 function targetParagraphs() {
-	return Array.from(
-		document.querySelectorAll('p, article p, main p, .content p, .post p, .article p')
-	).filter(function(paragraph) {
+	return Array.from(document.querySelectorAll('p')).filter(function(paragraph) {
 		return !isEditableRegion(paragraph);
 	});
+}
+
+function createParagraphSnapshot() {
+	const paragraphs = targetParagraphs();
+	const indexMap = new Map();
+	paragraphs.forEach(function(paragraph, index) {
+		indexMap.set(paragraph, index);
+	});
+	return { paragraphs: paragraphs, indexMap: indexMap };
+}
+
+function shouldPreserveInlineElement(element) {
+	if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+	if (element.classList.contains('js-detect-wrap')) return false;
+	if (isEditableRegion(element)) return false;
+
+	const tag = element.tagName;
+	if (!['SPAN', 'MARK', 'A', 'ABBR', 'CODE'].includes(tag)) return false;
+
+	const text = (element.textContent || '').trim();
+	if (!text || text.length > 64) return false;
+
+	if (tag === 'MARK' || tag === 'A' || tag === 'ABBR' || tag === 'CODE') return true;
+	if (element.hasAttribute('style') || element.className) return true;
+
+	return Array.from(element.attributes).some(function(attribute) {
+		return attribute.name.startsWith('data-')
+			|| attribute.name.startsWith('aria-')
+			|| attribute.name === 'title';
+	});
+}
+
+function markAtomicInlineElement(element) {
+	if (!element.classList.contains('js-detect-wrap')) {
+		element.classList.add('js-detect-wrap');
+		element.setAttribute('data-waspline-added-wrap-class', 'true');
+	}
+	element.setAttribute('data-waspline-preserve-style', 'true');
+}
+
+function wrapParagraphForLineDetection(node) {
+	if (!node) return;
+
+	if (node.nodeType === Node.TEXT_NODE) {
+		if (node.parentElement && node.parentElement.hasAttribute('data-waspline-preserve-style')) return;
+		const characters = (node.textContent || '').split('');
+		if (characters.length === 0) return;
+
+		const fragment = document.createDocumentFragment();
+		characters.forEach(function(character) {
+			if (!character) return;
+			const span = document.createElement('span');
+			span.className = 'js-detect-wrap';
+			span.innerText = character;
+			fragment.appendChild(span);
+		});
+		node.parentNode.insertBefore(fragment, node);
+		node.parentNode.removeChild(node);
+		return;
+	}
+
+	if (node.nodeType !== Node.ELEMENT_NODE) return;
+	if (node.classList.contains('js-detect-wrap')) return;
+
+	if (shouldPreserveInlineElement(node)) {
+		markAtomicInlineElement(node);
+		return;
+	}
+
+	Array.from(node.childNodes).forEach(wrapParagraphForLineDetection);
+}
+
+function getLinesPreservingInlineStyles(paragraph) {
+	wrapParagraphForLineDetection(paragraph);
+
+	const spans = paragraph.getElementsByClassName('js-detect-wrap');
+	let lastOffset = 0;
+	let line = [];
+	const lines = [];
+
+	for (let i = 0; i < spans.length; i++) {
+		const offset = spans[i].offsetTop + spans[i].getBoundingClientRect().height;
+		if (offset === lastOffset) {
+			line.push(spans[i]);
+		} else {
+			if (line.length > 0) lines.push(line);
+			line = [spans[i]];
+		}
+		lastOffset = offset;
+	}
+
+	if (line.length > 0) lines.push(line);
+	return lines;
 }
 
 function hex_to_rgb(hex) {
@@ -91,6 +184,7 @@ function colorLine(spans, gradientColors, reverse) {
 		const idx = reverse ? len - 1 - i : i;
 		const colorIdx = Math.min(Math.floor(i * colorLen / len), colorLen - 1);
 		const span = spans[idx];
+		if (span.hasAttribute('data-waspline-preserve-style')) continue;
 		rememberOriginalColor(span);
 		span.style.color = gradientColors[colorIdx];
 	}
@@ -127,9 +221,20 @@ function restoreSentenceBold() {
 	});
 }
 
+function restoreAtomicInlineElements() {
+	document.querySelectorAll('[data-waspline-preserve-style]').forEach(function(element) {
+		if (element.getAttribute('data-waspline-added-wrap-class') === 'true') {
+			element.classList.remove('js-detect-wrap');
+		}
+		element.removeAttribute('data-waspline-added-wrap-class');
+		element.removeAttribute('data-waspline-preserve-style');
+	});
+}
+
 function restoreOriginalStyling() {
 	restoreOriginalColors();
 	restoreSentenceBold();
+	restoreAtomicInlineElements();
 }
 
 function markSpanRangeBold(spans, offsets, start, end) {
@@ -137,6 +242,7 @@ function markSpanRangeBold(spans, offsets, start, end) {
 		const spanStart = offsets[i];
 		const spanEnd = spanStart + (spans[i].textContent || '').length;
 		if (spanEnd <= start || spanStart >= end) continue;
+		if (spans[i].hasAttribute('data-waspline-preserve-style')) continue;
 		rememberOriginalWeight(spans[i]);
 		spans[i].style.fontWeight = '700';
 	}
@@ -164,9 +270,10 @@ function applySentenceStartBold(wordCount, boundaryMode) {
 	applySentenceStartBoldToParagraphs(targetParagraphs(), wordCount, boundaryMode);
 }
 
-function processBatch(paragraphs, startIdx, colors, baseColor, gradientSize, lineno, resolve) {
+function processBatch(paragraphs, startIdx, colors, baseColor, gradientSize, lineno, resolve, settings, defaultScheme, regionContextCache) {
 	const endIdx = Math.min(startIdx + BATCH_SIZE, paragraphs.length);
-	const activeColors = colors.map(function(color) { return hex_to_rgb(color); });
+	const defaultActiveColors = colors.map(function(color) { return hex_to_rgb(color); });
+	const backgroundCache = regionContextCache || new WeakMap();
 
 	for (let i = startIdx; i < endIdx; i++) {
 		const paragraph = paragraphs[i];
@@ -174,14 +281,24 @@ function processBatch(paragraphs, startIdx, colors, baseColor, gradientSize, lin
 		if (!paragraph.textContent || paragraph.textContent.trim().length < 2) continue;
 
 		try {
-			const lines = lineWrapDetector.getLines(paragraph);
+			const colorContext = resolveParagraphColorContext(
+				paragraph,
+				settings,
+				defaultScheme,
+				defaultActiveColors,
+				baseColor,
+				backgroundCache
+			);
+			const activeColors = colorContext.activeColors;
+			const paragraphBaseColor = colorContext.baseColor;
+			const lines = getLinesPreservingInlineStyles(paragraph);
 			for (const line of lines) {
 				if (!line || line.length === 0) continue;
 
 				const colorIdx = Math.floor(lineno / 2) % activeColors.length;
 				const isLeft = (lineno % 2 === 0);
 				const gradientColors = computeGradientColors(
-					baseColor,
+					paragraphBaseColor,
 					activeColors[colorIdx],
 					Math.min(line.length, GRADIENT_STEPS),
 					gradientSize
@@ -197,16 +314,17 @@ function processBatch(paragraphs, startIdx, colors, baseColor, gradientSize, lin
 
 	if (endIdx < paragraphs.length) {
 		requestAnimationFrame(function() {
-			processBatch(paragraphs, endIdx, colors, baseColor, gradientSize, lineno, resolve);
+			processBatch(paragraphs, endIdx, colors, baseColor, gradientSize, lineno, resolve, settings, defaultScheme, backgroundCache);
 		});
 	} else {
 		resolve();
 	}
 }
 
-function applyGradient(colors, colorText, gradientSize) {
+function applyGradient(colors, colorText, gradientSize, settings, defaultScheme) {
 	return new Promise(function(resolve) {
-		const allParagraphs = targetParagraphs();
+		const snapshot = createParagraphSnapshot();
+		const allParagraphs = snapshot.paragraphs;
 		if (allParagraphs.length === 0) {
 			resolve();
 			return;
@@ -221,18 +339,25 @@ function applyGradient(colors, colorText, gradientSize) {
 		});
 
 		const baseColor = hex_to_rgb(colorText);
-		const runs = paragraphRunsInDocumentOrder(immediateParagraphs);
+		const runs = paragraphRunsInDocumentOrder(immediateParagraphs, snapshot);
+		const backgroundCache = new WeakMap();
 		let runIndex = 0;
 
 		function processNextRun() {
 			if (runIndex >= runs.length) {
-				if (pendingParagraphs.size > 0) scheduleContentRefresh();
+				if (pendingParagraphs.size > 0) {
+					const nextDelay = deferredParagraphs.length > 0
+						&& paragraphIsNearViewport(deferredParagraphs[0])
+						? 24
+						: 120;
+					scheduleContentRefresh(nextDelay);
+				}
 				resolve();
 				return;
 			}
 
 			const run = runs[runIndex++];
-			const startingLine = startingLineNumberForParagraph(run[0]);
+			const startingLine = startingLineNumberForParagraph(run[0], snapshot);
 			requestAnimationFrame(function() {
 				processBatch(
 					run,
@@ -241,7 +366,10 @@ function applyGradient(colors, colorText, gradientSize) {
 					baseColor,
 					gradientSize,
 					startingLine,
-					processNextRun
+					processNextRun,
+					settings,
+					defaultScheme,
+					backgroundCache
 				);
 			});
 		}
@@ -254,7 +382,7 @@ function paragraphMatchesTarget(element) {
 	return element
 		&& element.nodeType === Node.ELEMENT_NODE
 		&& element.matches
-		&& element.matches('p, article p, main p, .content p, .post p, .article p')
+		&& element.matches('p')
 		&& !isEditableRegion(element);
 }
 
@@ -283,7 +411,7 @@ function collectTargetParagraphs(node, targetSet) {
 
 	if (paragraphMatchesTarget(node)) targetSet.add(node);
 	if (node.querySelectorAll) {
-		node.querySelectorAll('p, article p, main p, .content p, .post p, .article p').forEach(function(paragraph) {
+		node.querySelectorAll('p').forEach(function(paragraph) {
 			if (!isEditableRegion(paragraph)) targetSet.add(paragraph);
 		});
 	}
@@ -343,9 +471,10 @@ function applySentenceStartBoldToParagraphs(paragraphs, wordCount, boundaryMode)
 	});
 }
 
-function startingLineNumberForParagraph(paragraph) {
-	const allParagraphs = targetParagraphs();
-	const index = allParagraphs.indexOf(paragraph);
+function startingLineNumberForParagraph(paragraph, snapshot) {
+	const context = snapshot || createParagraphSnapshot();
+	const allParagraphs = context.paragraphs;
+	const index = context.indexMap.has(paragraph) ? context.indexMap.get(paragraph) : -1;
 	if (index <= 0) return 0;
 
 	for (let i = index - 1; i >= 0; i--) {
@@ -357,10 +486,7 @@ function startingLineNumberForParagraph(paragraph) {
 	return 0;
 }
 
-function viewportPriority(paragraph) {
-	const rect = paragraph.getBoundingClientRect();
-	const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-
+function viewportPriorityFromRect(rect, viewportHeight) {
 	if (rect.bottom >= -VIEWPORT_MARGIN && rect.top <= viewportHeight + VIEWPORT_MARGIN) {
 		const center = (rect.top + rect.bottom) / 2;
 		const viewportCenter = viewportHeight / 2;
@@ -374,18 +500,30 @@ function viewportPriority(paragraph) {
 	return viewportHeight * 10 + Math.abs(rect.top - viewportHeight);
 }
 
+function paragraphIsNearViewport(paragraph) {
+	const rect = paragraph.getBoundingClientRect();
+	const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+	return rect.bottom >= -VIEWPORT_MARGIN && rect.top <= viewportHeight + VIEWPORT_MARGIN;
+}
+
 function prioritizeParagraphsForViewport(paragraphs) {
-	return paragraphs.slice().sort(function(a, b) {
-		return viewportPriority(a) - viewportPriority(b);
+	const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+	return paragraphs.map(function(paragraph) {
+		const rect = paragraph.getBoundingClientRect();
+		return {
+			paragraph: paragraph,
+			priority: viewportPriorityFromRect(rect, viewportHeight)
+		};
+	}).sort(function(a, b) {
+		return a.priority - b.priority;
+	}).map(function(entry) {
+		return entry.paragraph;
 	});
 }
 
-function paragraphRunsInDocumentOrder(paragraphs) {
-	const allParagraphs = targetParagraphs();
-	const indexMap = new Map();
-	allParagraphs.forEach(function(paragraph, index) {
-		indexMap.set(paragraph, index);
-	});
+function paragraphRunsInDocumentOrder(paragraphs, snapshot) {
+	const context = snapshot || createParagraphSnapshot();
+	const indexMap = context.indexMap;
 
 	const ordered = Array.from(new Set(paragraphs))
 		.filter(function(paragraph) { return indexMap.has(paragraph); })
@@ -417,6 +555,7 @@ function processParagraphSubset(paragraphs, settings) {
 
 	const style = resolveEffectiveStyle(settings);
 	const baseColor = hex_to_rgb(style.text);
+	const snapshot = createParagraphSnapshot();
 	const prioritized = prioritizeParagraphsForViewport(paragraphs);
 	const batches = [];
 	for (let i = 0; i < prioritized.length; i += DYNAMIC_BATCH_SIZE) {
@@ -433,7 +572,8 @@ function processParagraphSubset(paragraphs, settings) {
 			}
 
 			const batch = batches[batchIndex++];
-			const runs = paragraphRunsInDocumentOrder(batch);
+			const backgroundCache = new WeakMap();
+			const runs = paragraphRunsInDocumentOrder(batch, snapshot);
 			let runIndex = 0;
 
 			function processNextRun() {
@@ -450,7 +590,7 @@ function processParagraphSubset(paragraphs, settings) {
 				}
 
 				const run = runs[runIndex++];
-				const startingLine = startingLineNumberForParagraph(run[0]);
+				const startingLine = startingLineNumberForParagraph(run[0], snapshot);
 				requestAnimationFrame(function() {
 					processBatch(
 						run,
@@ -459,7 +599,10 @@ function processParagraphSubset(paragraphs, settings) {
 						baseColor,
 						style.gradientSize,
 						startingLine,
-						processNextRun
+						processNextRun,
+						settings,
+						style.scheme,
+						backgroundCache
 					);
 				});
 			}
@@ -471,12 +614,13 @@ function processParagraphSubset(paragraphs, settings) {
 	});
 }
 
-function scheduleContentRefresh() {
+function scheduleContentRefresh(delay) {
 	if (contentRefreshTimer) clearTimeout(contentRefreshTimer);
+	const wait = typeof delay === 'number' ? delay : 120;
 	contentRefreshTimer = setTimeout(function() {
 		contentRefreshTimer = null;
 		if (isProcessing || !latestSettings || pendingParagraphs.size === 0) {
-			if (pendingParagraphs.size > 0) scheduleContentRefresh();
+			if (pendingParagraphs.size > 0) scheduleContentRefresh(32);
 			return;
 		}
 
@@ -487,17 +631,21 @@ function scheduleContentRefresh() {
 
 		const prioritized = prioritizeParagraphsForViewport(connected);
 		const paragraphs = prioritized.slice(0, DYNAMIC_BATCH_SIZE);
-		prioritized.slice(DYNAMIC_BATCH_SIZE).forEach(function(paragraph) {
+		const remaining = prioritized.slice(DYNAMIC_BATCH_SIZE);
+		remaining.forEach(function(paragraph) {
 			pendingParagraphs.add(paragraph);
 		});
+		const nextDelay = remaining.length > 0 && paragraphIsNearViewport(remaining[0])
+			? 24
+			: 120;
 
 		isProcessing = true;
 		processParagraphSubset(paragraphs, latestSettings)
 			.finally(function() {
 				isProcessing = false;
-				if (pendingParagraphs.size > 0) scheduleContentRefresh();
+				if (pendingParagraphs.size > 0) scheduleContentRefresh(nextDelay);
 			});
-	}, 120);
+	}, wait);
 }
 
 function parseComputedColor(value) {
@@ -522,14 +670,66 @@ function luminance(rgb) {
 		+ 0.0722 * channelToLinear(rgb[2]);
 }
 
-function findOpaqueBackground(start) {
+function findBackgroundRegion(start) {
 	let element = start;
 	while (element && element.nodeType === Node.ELEMENT_NODE) {
 		const color = parseComputedColor(getComputedStyle(element).backgroundColor);
-		if (color) return color;
+		if (color) {
+			return { element: element, color: color };
+		}
 		element = element.parentElement;
 	}
 	return null;
+}
+
+function findOpaqueBackground(start) {
+	const region = findBackgroundRegion(start);
+	return region ? region.color : null;
+}
+
+function schemeFromBackground(background) {
+	if (!background) return null;
+	const value = luminance(background);
+	if (value >= 0.82) return 'light';
+	if (value <= 0.18) return 'dark';
+	return null;
+}
+
+function resolveParagraphColorContext(
+	paragraph,
+	settings,
+	defaultScheme,
+	defaultActiveColors,
+	defaultBaseColor,
+	regionContextCache
+) {
+	if (!settings || !settings.pageBackgroundAuto) {
+		return { activeColors: defaultActiveColors, baseColor: defaultBaseColor };
+	}
+
+	const region = findBackgroundRegion(paragraph);
+	if (!region) {
+		return { activeColors: defaultActiveColors, baseColor: defaultBaseColor };
+	}
+
+	if (regionContextCache && regionContextCache.has(region.element)) {
+		return regionContextCache.get(region.element);
+	}
+
+	const localScheme = schemeFromBackground(region.color);
+	let context;
+	if (!localScheme || localScheme === defaultScheme) {
+		context = { activeColors: defaultActiveColors, baseColor: defaultBaseColor };
+	} else {
+		const palette = CONFIG.getPalette(settings.theme, localScheme, settings);
+		context = {
+			activeColors: [hex_to_rgb(palette.color1), hex_to_rgb(palette.color2)],
+			baseColor: hex_to_rgb(palette.text)
+		};
+	}
+
+	if (regionContextCache) regionContextCache.set(region.element, context);
+	return context;
 }
 
 function detectPageScheme() {
@@ -598,10 +798,13 @@ async function applyCurrentSettings(settings) {
 	}
 
 	const style = resolveEffectiveStyle(settings);
+	lastResolvedScheme = style.scheme;
 	await applyGradient(
 		style.colors,
 		style.text,
-		style.gradientSize
+		style.gradientSize,
+		settings,
+		style.scheme
 	);
 
 	if (settings.boldSentenceStarts) {
@@ -669,10 +872,31 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
 	return false;
 });
 
+function scheduleAppearanceCheck() {
+	if (appearanceCheckTimer) clearTimeout(appearanceCheckTimer);
+	appearanceCheckTimer = setTimeout(function() {
+		appearanceCheckTimer = null;
+		if (!latestSettings || !latestSettings.enabled) return;
+
+		const allowedHere = CONFIG.shouldRunOnDomain(currentDomain(), latestSettings);
+		if (!allowedHere) return;
+
+		const scheme = resolveScheme(latestSettings);
+		if (lastResolvedScheme === null) {
+			lastResolvedScheme = scheme;
+			return;
+		}
+		if (scheme === lastResolvedScheme) return;
+
+		lastResolvedScheme = scheme;
+		scheduleRefresh(0);
+	}, 80);
+}
+
 if (systemAppearance.addEventListener) {
-	systemAppearance.addEventListener('change', function() { scheduleRefresh(0); });
+	systemAppearance.addEventListener('change', scheduleAppearanceCheck);
 } else if (systemAppearance.addListener) {
-	systemAppearance.addListener(function() { scheduleRefresh(0); });
+	systemAppearance.addListener(scheduleAppearanceCheck);
 }
 
 chrome.storage.onChanged.addListener(function(changes, areaName) {
@@ -724,7 +948,7 @@ function scheduleViewportRefresh() {
 		candidates.forEach(function(paragraph) {
 			pendingParagraphs.add(paragraph);
 		});
-		scheduleContentRefresh();
+		scheduleContentRefresh(24);
 	}, 80);
 }
 
@@ -746,7 +970,7 @@ const contentObserver = new MutationObserver(function(mutations) {
 		});
 	});
 
-	if (pendingParagraphs.size > 0) scheduleContentRefresh();
+	if (pendingParagraphs.size > 0) scheduleContentRefresh(32);
 });
 
 if (document.body) {
@@ -758,7 +982,7 @@ if (document.body) {
 }
 
 const appearanceObserver = new MutationObserver(function() {
-	scheduleRefresh(80);
+	scheduleAppearanceCheck();
 });
 
 if (document.documentElement) {
